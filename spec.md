@@ -1961,11 +1961,14 @@ Do not require decrypting every full file into memory at once.
 
 Use a dedicated stable HTTPS origin.
 
-Example:
-
 ```text
-vault.example.com
+vault.chakri.me
 ```
+
+This is a **one-way door**. OPFS is origin-scoped and WebAuthn credentials are
+RP-scoped, so moving the hostname after anyone has created a vault orphans their
+local data and invalidates their device unlock. There is no migration path,
+because the app cannot read the old origin's storage from the new one.
 
 The origin must remain stable because:
 
@@ -2003,6 +2006,44 @@ Recommended:
 - immutable hashed assets
 
 The vault application's hosting account should itself use strong MFA/passkeys.
+
+## 54.1 What the chosen host actually delivers
+
+Deployment is GitHub Pages via GitHub Actions (`.github/workflows/deploy.yml`).
+Pages serves static files with fixed headers and **no way to add custom ones**,
+so the list above is only partly achievable. Being precise about the gap matters
+more than pretending it is closed:
+
+| Control | On GitHub Pages | How |
+| --- | --- | --- |
+| HTTPS only | yes | enforced by Pages |
+| HSTS | yes | sent by Pages |
+| Restrictive CSP | yes, mostly | `<meta http-equiv>` injected at build |
+| `frame-ancestors` | **no** | ignored in `meta`; see below |
+| `X-Content-Type-Options` | **no** | header-only, unavailable |
+| `Referrer-Policy` | partly | `<meta name="referrer" content="no-referrer">` |
+| `Permissions-Policy` | **no** | header-only, unavailable |
+| No third-party scripts | yes | everything is self-hosted |
+| Locked dependencies | yes | `npm ci` + committed lockfile |
+| Dependency audit | yes | `npm audit --omit=dev` in CI |
+| Immutable hashed assets | yes | emitted by the bundler |
+
+**The `frame-ancestors` gap is mitigated in code, not ignored.** A `meta` CSP
+silently drops that directive, which would leave the app framable by any origin -
+and a vault whose "Save decrypted file" button can be steered by an invisible
+overlay is a real problem. `main.ts` therefore compares `window.self` to
+`window.top` before booting and refuses to render at all inside a frame. That
+comparison needs no cross-origin access, so it holds regardless of who is
+framing.
+
+`X-Content-Type-Options` and `Permissions-Policy` have no in-document
+equivalent. The residual risk is small here - Pages sets correct MIME types, and
+the app requests no permissions - but it is residual risk, not zero.
+
+Moving to a host that can send headers (Cloudflare Pages and Netlify both
+support a `_headers` file) would close all three gaps and delete the frame check.
+The CSP is already defined once in `vite.config.ts` and served as a real header
+in dev, so that migration is a config change, not a rewrite.
 
 ---
 

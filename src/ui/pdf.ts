@@ -1,4 +1,5 @@
 import { el } from "./dom.ts";
+import { zero } from "../vault/bytes.ts";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 
 /**
@@ -54,7 +55,7 @@ export async function renderPdf(blob: Blob, container: HTMLElement): Promise<Pdf
   try {
     doc = await loadingTask.promise;
   } catch (e) {
-    data.fill(0);
+    zero(data);
     throw e;
   }
 
@@ -124,7 +125,10 @@ export async function renderPdf(blob: Blob, container: HTMLElement): Promise<Pdf
       // destroy() lives on the loading task; the proxy only offers cleanup().
       // This is what tears down the pdf.js worker.
       void loadingTask.destroy();
-      data.fill(0);
+      // getDocument() takes ownership of `data` and transfers it to the pdf.js
+      // worker, detaching the buffer here -- so this is a no-op rather than a
+      // scrub, and it must not throw on the way out of a preview.
+      zero(data);
     },
   };
 }

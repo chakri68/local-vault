@@ -27,9 +27,20 @@ export function concat(...parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-/** Best-effort scrub. JS gives no guarantee, but it shortens the window. */
+/**
+ * Best-effort scrub. JS gives no guarantee, but it shortens the window.
+ *
+ * A buffer that has been transferred to a worker is *detached*, and filling it
+ * throws. There is nothing to scrub in that case -- we no longer own the bytes,
+ * the receiving context does -- so a detached buffer is a no-op, not an error.
+ */
 export function zero(b: Uint8Array): void {
-  b.fill(0);
+  if (b.byteLength === 0) return;
+  try {
+    b.fill(0);
+  } catch {
+    /* detached: the bytes belong to whoever we handed them to */
+  }
 }
 
 export function uuidBytes(uuid: string): Uint8Array {

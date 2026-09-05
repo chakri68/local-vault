@@ -1,0 +1,94 @@
+# Deploys Local Vault to vault.chakri.me via GitHub Pages.
+#
+# §53: the origin must never move. OPFS is origin-scoped and WebAuthn
+# credentials are RP-scoped, so changing this hostname after anyone has created
+# a vault orphans their local data and invalidates their device unlock. Treat
+# vault.chakri.me as permanent.
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; a half-published vault app is worse than a stale one.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.11.1"
+          cache: npm
+
+      # `ci`, not `install`: §54 wants locked dependencies, and a deploy is
+      # exactly where an unpinned transitive bump must not sneak in.
+      - name: Install
+        run: npm ci
+
+      # Only production dependencies ship. A dev-only advisory should not be
+      # able to block a security fix from going out.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build
+        run: npm run build
+
+      # GitHub Pages cannot send headers, so the policy travels in the document
+      # (§54.1). If that tag ever goes missing the app still works perfectly,
+      # which is precisely why it needs a machine to notice instead of a person.
+      - name: Verify the shipped security posture
+        run: |
+          set -euo pipefail
+
+          grep -q 'http-equiv="Content-Security-Policy"' dist/index.html \
+            || { echo "::error::CSP meta tag missing from dist/index.html"; exit 1; }
+
+          for directive in "default-src 'self'" "script-src 'self' 'wasm-unsafe-eval'" \
+                           "object-src 'none'" "frame-src 'none'" "connect-src 'none'" \
+                           "base-uri 'none'" "worker-src 'self'"; do
+            grep -qF "$directive" dist/index.html \
+              || { echo "::error::CSP is missing: $directive"; exit 1; }
+          done
+
+          test -f dist/CNAME || { echo "::error::dist/CNAME missing"; exit 1; }
+          grep -qx 'vault.chakri.me' dist/CNAME \
+            || { echo "::error::CNAME does not name vault.chakri.me"; exit 1; }
+
+          # §44: zero third-party requests. Nothing in the shipped HTML may
+          # point off-origin, and every dependency must be self-hosted.
+          if grep -Eq '(src|href)="https?://' dist/index.html; then
+            echo "::error::dist/index.html references an external origin"
+            grep -Eo '(src|href)="https?://[^"]*"' dist/index.html
+            exit 1
+          fi
+
+          test -f dist/sw.js || { echo "::error::service worker missing"; exit 1; }
+          test -f dist/manifest.webmanifest || { echo "::error::web app manifest missing"; exit 1; }
+
+          echo "CSP, CNAME, service worker and manifest all present."
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

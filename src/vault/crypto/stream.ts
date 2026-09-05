@@ -1,5 +1,5 @@
 import { createSHA256 } from "hash-wasm";
-import { concat, readU32be, readU64be, u32be, u64be } from "../bytes.ts";
+import { concat, readU32be, readU64be, u32be, u64be, zero } from "../bytes.ts";
 import { CHUNK_SIZE, NONCE_BYTES, OBJECT_FORMAT_VERSION, TAG_BYTES } from "../types.ts";
 import type { WrappedFileKey } from "./keys.ts";
 
@@ -188,7 +188,7 @@ export async function encryptObject(
       fileKey,
       plain as BufferSource,
     );
-    plain.fill(0);
+    zero(plain);
 
     const out = new Uint8Array(ct);
     await sink.write(out);

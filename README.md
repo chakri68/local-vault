@@ -82,6 +82,43 @@ under `connect-src 'none'` you find out immediately rather than at deploy.
 stay at `'none'` because hash-wasm inlines its binary as base64 — keep that
 property if you ever swap the KDF library.
 
+## Deploying
+
+Pushes to `main` build and publish to **vault.chakri.me** via GitHub Pages
+(`.github/workflows/deploy.yml`). Before the first deploy you need two things
+that live outside the repo:
+
+1. In the repo: **Settings → Pages → Source = GitHub Actions**.
+2. In Cloudflare DNS for `chakri.me`: a `CNAME` record `vault` →
+   `chakri68.github.io`, **DNS only** (grey cloud — an orange cloud in front of
+   Pages breaks its certificate provisioning until Pages has issued one).
+
+That hostname is a one-way door. OPFS is origin-scoped and WebAuthn credentials
+are RP-scoped, so moving it later orphans every existing vault and every enrolled
+device. There's no migration path — the new origin can't read the old one's
+storage.
+
+### The header problem
+
+GitHub Pages serves static files with fixed headers and no way to add custom
+ones, so the CSP travels in a `<meta>` tag injected at build time instead. That
+costs three things: `frame-ancestors` (silently ignored in `meta`),
+`X-Content-Type-Options`, and `Permissions-Policy`.
+
+The first one actually matters — a vault whose "Save decrypted file" button can
+be driven by an invisible overlay is a real problem — so `main.ts` refuses to
+boot inside a frame at all. The other two are residual risk: small, since Pages
+sets correct MIME types and the app requests no permissions, but not zero. §54.1
+has the full table.
+
+Moving to a host that can send headers (Cloudflare Pages, Netlify — both take a
+`_headers` file) closes all three and deletes the frame check. The CSP is defined
+once in `vite.config.ts` and already served as a real header in dev, so it's a
+config change rather than a rewrite.
+
+CI refuses to publish a build whose CSP meta tag went missing, whose CNAME
+doesn't say `vault.chakri.me`, or whose HTML references an off-origin URL.
+
 ## What works
 
 Vault creation, passphrase unlock, auto-lock, chunked encrypted storage in OPFS,

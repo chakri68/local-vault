@@ -1,6 +1,6 @@
 import { BlobReader, BlobWriter, TextReader, ZipReader, ZipWriter, configure } from "@zip.js/zip.js";
 import type { FileEntry } from "@zip.js/zip.js";
-import { b64, unb64 } from "./bytes.ts";
+import { b64, unb64, zero } from "./bytes.ts";
 import { deriveKek } from "./crypto/argon2.ts";
 import { importMasterKey, openBytes } from "./crypto/keys.ts";
 import { decryptManifest } from "./manifest.ts";
@@ -205,7 +205,7 @@ export async function restoreBackup(
     try {
       master = await importMasterKey(masterRaw);
     } finally {
-      masterRaw.fill(0);
+      zero(masterRaw);
     }
 
     const manifestBlob = await manifestEntry.getData<Blob>(new BlobWriter());

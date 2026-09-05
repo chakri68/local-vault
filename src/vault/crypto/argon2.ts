@@ -1,4 +1,5 @@
 import { argon2id } from "hash-wasm";
+import { zero } from "../bytes.ts";
 import type { KdfParams } from "../types.ts";
 
 /**
@@ -44,6 +45,6 @@ export async function deriveKek(
       "decrypt",
     ]);
   } finally {
-    raw.fill(0);
+    zero(raw);
   }
 }
