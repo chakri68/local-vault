@@ -448,21 +448,35 @@ pan-card.jpg
 
 OPFS paths must intentionally reveal as little as possible.
 
-Recommended layout:
+Storage is organised into **generations**, so that replacing a vault is atomic
+(SS33, SS34):
 
 ```text
-/vault/
-  header.json
-  manifest/
-    active
-    manifest-a.enc
-    manifest-b.enc
-  objects/
-    019ab45d...
-    019ab46e...
-    019ab4ff...
-  temp/
+/current                  text: the name of the live generation
+/vault/                   legacy generation, from before generations existed
+/g-<uuid>/                a generation
+    header.json
+    manifest/
+      active
+      manifest-a.enc
+      manifest-b.enc
+    objects/
+      019ab45d...
+      019ab46e...
+    temp/
 ```
+
+A restore writes an entirely new generation, verifies it end to end, and only
+then rewrites `/current`. Until that one small write lands the existing vault is
+untouched and still live. This is the same write-verify-flip trick as the
+manifest A/B slots (SS12), applied one level up.
+
+Anything not named by `/current` is debris - a superseded vault, or a generation
+from a restore that failed - and is safe to collect precisely because nothing
+references it.
+
+A pre-generation vault is adopted by *naming* it (`/current` = `vault`), never by
+copying it.
 
 `header.json` may contain only non-sensitive information required to unlock/restore the vault, such as:
 
@@ -545,6 +559,14 @@ active
 ```
 
 Write the next snapshot fully, verify it, and only then change `active`.
+
+**Mutations must be serialised.** The scheme reads `active`, writes the *other*
+slot, then flips. Two concurrent mutations both read the same `active`, both
+target the same inactive slot, and the second silently overwrites the first's
+verified snapshot - so both operations report success while one change vanishes
+at the next unlock, leaving an object with no manifest entry. The worker
+therefore runs every state-changing verb through a queue. Reads stay concurrent;
+they touch no shared state.
 
 ---
 
@@ -790,6 +812,13 @@ Auto-lock
 ```
 
 Mobile foreground/background events are not perfectly reliable security boundaries, so cryptographic key lifetime should be minimized.
+
+**Locking must cancel work already in flight, not merely drop the key.** A read
+that has already unwrapped a file key holds everything it needs; clearing the
+master key reference does not stop it, and it will finish decrypting and hand
+plaintext to the UI after the vault is supposedly locked. The vault keeps an
+epoch counter that every lock increments, and long-running operations check it
+between chunks and abort when it moves.
 
 ---
 
@@ -1340,7 +1369,27 @@ Restore flow:
 14. atomically activate restored manifest;
 15. open vault.
 
-A failed restore must not destroy an existing vault.
+### How that is actually guaranteed
+
+Steps 12-14 happen in a **new generation** (SS11), never over the live vault:
+
+1. everything is validated - magic, version, passphrase, manifest, and that every
+   item the manifest references has an entry in the archive;
+2. objects are written into a fresh generation, which nothing points at;
+3. **every chunk of every object is authenticated, read back off disk**;
+4. the manifest and header are written into that generation;
+5. `/current` is rewritten - a single small write, and the new vault is live;
+6. the superseded generation is collected.
+
+Checking that an archive merely *contains* a file of the right name is not
+checking it at all. Without step 3 a truncated, corrupted or substituted object
+restores cleanly, reports success, and is discovered months later when the
+document is opened - by which time the healthy vault it replaced is long gone.
+Step 3 doubles restore I/O and is worth every byte.
+
+A failed restore must not destroy an existing vault, and with this ordering it
+cannot: before step 5 the old vault is still the live one, and after step 5 the
+new one is. There is no moment where neither is.
 
 ---
 
@@ -1377,6 +1426,20 @@ Each encrypted object should have integrity information sufficient to detect:
 - invalid authentication tags.
 
 AES-GCM authentication already detects ciphertext modification at the chunk level.
+It does not, on its own, detect any of the following, so these are checked
+explicitly:
+
+- **An internally inconsistent header.** The object header is plaintext and
+  therefore attacker-controlled. `totalChunks: 0` with `plaintextSize: 0` is a
+  truncation that "authenticates" perfectly - the decrypt loop runs zero times,
+  no tag is ever checked, and a non-empty document reads back as an empty blob
+  with no error. Decoding rejects any header whose chunk count disagrees with its
+  declared size, or whose chunk size is implausible.
+- **A size that disagrees with the manifest.** The manifest is authenticated, so
+  it is the authority on how large a document is; the plaintext header is not.
+- **Bytes after the final chunk.** The tags prove each chunk and the AAD proves
+  how many there should be, but neither says anything about what follows the last
+  one. Only comparing against the real file length catches an appended object.
 
 The manifest may additionally store a hash of the original plaintext for duplicate detection and end-to-end verification.
 

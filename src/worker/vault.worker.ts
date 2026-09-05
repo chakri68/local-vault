@@ -5,7 +5,6 @@
  * rest. The main thread reaches it exclusively through the verbs in rpc.ts (§7).
  */
 import { restoreBackup } from "../vault/backup.ts";
-import * as opfs from "../vault/opfs.ts";
 import { Vault } from "../vault/vault.ts";
 import type { Progress } from "../vault/vault.ts";
 import { storageStatus } from "../platform/storage.ts";
@@ -17,6 +16,46 @@ const ctx = self as unknown as {
 };
 
 const vault = new Vault();
+
+/**
+ * Verbs that mutate vault state run one at a time.
+ *
+ * The manifest A/B scheme (§12) reads `active`, writes the *other* slot, then
+ * flips. Two concurrent mutations both read the same `active`, both target the
+ * same inactive slot, and the second silently overwrites the first's verified
+ * snapshot -- so both RPCs report success while one change vanishes at the next
+ * unlock, leaving an object with no manifest entry.
+ *
+ * Reads stay concurrent: they touch no shared state, and a long decrypt has no
+ * business blocking the UI's next question.
+ */
+const SERIALIZED = new Set<Req["t"]>([
+  "create",
+  "unlock",
+  "lock",
+  "import",
+  "update",
+  "delete",
+  "addCollection",
+  "settings",
+  "changePassphrase",
+  "markBackedUp",
+  "exportBackup",
+  "discardBackup",
+  "restoreBackup",
+  "verify",
+  "destroy",
+]);
+
+let queue: Promise<unknown> = Promise.resolve();
+
+function serialize<T>(run: () => Promise<T>): Promise<T> {
+  // settle() rather than then() so one failed request does not wedge the queue.
+  const settle = () => queue;
+  const next = settle().then(run, run);
+  queue = next.catch(() => undefined);
+  return next;
+}
 
 ctx.addEventListener("message", (e: MessageEvent) => {
   const msg = e.data as { id: number; req: Req };
@@ -30,7 +69,9 @@ async function handle(id: number, req: Req): Promise<void> {
   };
 
   try {
-    const value = await dispatch(req, onProgress);
+    const value = SERIALIZED.has(req.t)
+      ? await serialize(() => dispatch(req, onProgress))
+      : await dispatch(req, onProgress);
     ctx.postMessage({ id, ok: true, value } satisfies Envelope);
   } catch (e) {
     const err = e as Error;
@@ -93,10 +134,10 @@ async function dispatch(req: Req, onProgress: (p: Progress) => void): Promise<un
       return vault.exportBackup(onProgress);
 
     case "readBackup":
-      return opfs.readTemp(req.tempName);
+      return vault.readBackupFile(req.tempName);
 
     case "discardBackup":
-      return opfs.deleteTemp(req.tempName);
+      return vault.discardBackupFile(req.tempName);
 
     case "restoreBackup": {
       const result = await restoreBackup(req.file, req.passphrase, { onProgress });
@@ -109,9 +150,7 @@ async function dispatch(req: Req, onProgress: (p: Progress) => void): Promise<un
       return vault.markBackedUp(req.at);
 
     case "destroy":
-      vault.lock();
-      await opfs.destroyVault();
-      await vault.probe();
+      await vault.destroy();
       return undefined;
   }
 }

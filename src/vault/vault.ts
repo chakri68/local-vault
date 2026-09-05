@@ -7,12 +7,10 @@ import {
   openBytes,
   rewrapMasterKey,
   sealBytes,
-  unwrapFileKey,
   wrapFileKey,
 } from "./crypto/keys.ts";
 import {
   chunkCount,
-  decodeHeader,
   decryptObject,
   encryptObject,
   hashBlob,
@@ -20,7 +18,10 @@ import {
 import type { ObjectHeader } from "./crypto/stream.ts";
 import { exportBackup } from "./backup.ts";
 import { loadManifest, saveManifest } from "./manifest.ts";
+import { openObject as openObjectChecked } from "./integrity.ts";
+import type { OpenObject } from "./integrity.ts";
 import * as opfs from "./opfs.ts";
+import type { VaultTree } from "./opfs.ts";
 import {
   CHUNK_SIZE,
   DEFAULT_COLLECTIONS,
@@ -57,9 +58,6 @@ export interface Progress {
 
 type ProgressFn = (p: Progress) => void;
 
-/** Header size cap — big enough for the fixed 72 bytes plus a wrapped key. */
-const HEADER_READ_BYTES = 256;
-
 export class Vault {
   state: VaultState = "UNINITIALIZED";
 
@@ -71,6 +69,14 @@ export class Vault {
   private master: CryptoKey | null = null;
   private header: VaultHeader | null = null;
   private manifest: Manifest | null = null;
+  private tree: VaultTree | null = null;
+
+  /**
+   * Bumped on every lock. Long-running work captures it and bails the moment it
+   * changes: without this, a read that already holds a file key keeps decrypting
+   * after lock() returns and posts plaintext to the main thread afterwards.
+   */
+  private epoch = 0;
 
   async probe(): Promise<VaultState> {
     if (this.state === "UNLOCKED") return this.state;
@@ -82,11 +88,28 @@ export class Vault {
     return this.state === "UNLOCKED" && this.master !== null;
   }
 
-  private require(): { master: CryptoKey; manifest: Manifest; header: VaultHeader } {
-    if (!this.master || !this.manifest || !this.header) {
+  private require(): {
+    master: CryptoKey;
+    manifest: Manifest;
+    header: VaultHeader;
+    tree: VaultTree;
+  } {
+    if (!this.master || !this.manifest || !this.header || !this.tree) {
       throw new Error("vault is locked");
     }
-    return { master: this.master, manifest: this.manifest, header: this.header };
+    return {
+      master: this.master,
+      manifest: this.manifest,
+      header: this.header,
+      tree: this.tree,
+    };
+  }
+
+  /** Fail closed if the vault was locked while this operation was running. */
+  private checkEpoch(epoch: number): void {
+    if (epoch !== this.epoch || !this.master) {
+      throw new DOMException("vault was locked during this operation", "AbortError");
+    }
   }
 
   /* ---------------- lifecycle ---------------- */
@@ -129,9 +152,17 @@ export class Vault {
       changesSinceBackup: 0,
     };
 
-    await opfs.writeHeaderRaw(JSON.stringify(header, null, 2));
-    await saveManifest(this.master, manifest);
+    // Manifest first, header second, activation last. Nothing on disk claims to
+    // be a vault until it is provably complete -- otherwise a crash between the
+    // two writes leaves a header that blocks vault creation but can never load a
+    // manifest, i.e. a vault that neither exists nor doesn't.
+    const tree = await opfs.createGeneration();
+    await saveManifest(tree, this.master, manifest);
+    await tree.writeHeaderRaw(JSON.stringify(header, null, 2));
+    await opfs.activate(tree);
+    await opfs.pruneOrphanGenerations();
 
+    this.tree = tree;
     this.header = header;
     this.manifest = manifest;
     this.state = "UNLOCKED";
@@ -144,8 +175,9 @@ export class Vault {
   async unlock(passphrase: string): Promise<void> {
     this.state = "UNLOCKING";
     try {
-      const raw = await opfs.readHeaderRaw();
-      if (!raw) throw new Error("no vault on this device");
+      const tree = await opfs.openCurrent();
+      const raw = tree ? await tree.readHeaderRaw() : null;
+      if (!tree || !raw) throw new Error("no vault on this device");
       const header = JSON.parse(raw) as VaultHeader;
       if (header.formatVersion > VAULT_FORMAT_VERSION) {
         throw new Error("this vault was created by a newer version of Local Vault");
@@ -159,13 +191,16 @@ export class Vault {
         zero(masterRaw);
       }
 
-      this.manifest = await loadManifest(this.master);
+      this.manifest = await loadManifest(tree, this.master);
       if (this.manifest.vaultId !== header.vaultId) {
         throw new Error("manifest does not belong to this vault");
       }
+      this.tree = tree;
       this.header = header;
       this.state = "UNLOCKED";
-      await opfs.sweepTemp();
+      await tree.sweepTemp();
+      // Debris from a restore that failed before it could flip `current`.
+      await opfs.pruneOrphanGenerations();
     } catch (e) {
       this.lock();
       this.state = "LOCKED";
@@ -175,15 +210,16 @@ export class Vault {
 
   lock(): void {
     this.state = "LOCKING";
+    this.epoch++;
     this.master = null;
     this.manifest = null;
     this.state = this.header ? "LOCKED" : "UNINITIALIZED";
-    void opfs.sweepTemp();
+    void this.tree?.sweepTemp();
   }
 
   /** §9.3: re-derive, re-wrap. No stored object is touched. */
   async changePassphrase(current: string, next: string): Promise<void> {
-    const { header } = this.require();
+    const { header, tree } = this.require();
     const oldKek = await deriveKek(current, unb64Safe(header.kdfSalt), header.kdfParams);
     await openBytes(oldKek, header.passphrase); // proves `current` is right before we move
 
@@ -197,7 +233,7 @@ export class Vault {
       kdfParams: DEFAULT_KDF_PARAMS,
       passphrase: rewrapped,
     };
-    await opfs.writeHeaderRaw(JSON.stringify(updated, null, 2));
+    await tree.writeHeaderRaw(JSON.stringify(updated, null, 2));
     this.header = updated;
   }
 
@@ -214,28 +250,9 @@ export class Vault {
     };
   }
 
-  private async openObject(item: VaultItem): Promise<{
-    file: File;
-    header: ObjectHeader;
-    headerLength: number;
-    fileKey: CryptoKey;
-  }> {
-    const { master, header: vaultHeader } = this.require();
-    const file = await opfs.readObject(item.objectId);
-    const head = new Uint8Array(await file.slice(0, HEADER_READ_BYTES).arrayBuffer());
-    const { header, byteLength } = decodeHeader(head);
-
-    // §51: the object must be the one the manifest points at. Both IDs are also
-    // in every chunk's AAD, so a swapped file fails to decrypt anyway — this just
-    // produces a comprehensible error instead of a tag failure.
-    if (bytesEqual(header.fileId, uuidBytes(item.objectId)) === false) {
-      throw new Error("object ID mismatch");
-    }
-    if (bytesEqual(header.vaultId, uuidBytes(vaultHeader.vaultId)) === false) {
-      throw new Error("object belongs to a different vault");
-    }
-
-    return { file, header, headerLength: byteLength, fileKey: await unwrapFileKey(master, header.key) };
+  private async openObject(item: VaultItem): Promise<OpenObject> {
+    const { master, header: vaultHeader, tree } = this.require();
+    return openObjectChecked(tree, master, vaultHeader.vaultId, item);
   }
 
   /**
@@ -245,16 +262,21 @@ export class Vault {
    * browser-managed blob storage instead of accumulating on the JS heap.
    */
   async readItem(id: string, onProgress?: ProgressFn, signal?: AbortSignal): Promise<Blob> {
+    const epoch = this.epoch;
     const item = this.item(id);
     const { file, header, headerLength, fileKey } = await this.openObject(item);
 
     const parts: Blob[] = [];
     let done = 0;
     for await (const chunk of decryptObject(file, headerLength, header, fileKey, { signal })) {
+      // A lock mid-read must actually stop the read, not just clear the key
+      // reference while decryption carries on and hands plaintext back.
+      this.checkEpoch(epoch);
       parts.push(new Blob([chunk as BufferSource]));
       done += chunk.length;
       onProgress?.({ phase: "decrypting", done, total: header.plaintextSize });
     }
+    this.checkEpoch(epoch);
     return new Blob(parts, { type: item.mimeType || "application/octet-stream" });
   }
 
@@ -285,7 +307,8 @@ export class Vault {
     meta: ImportMeta,
     opts: { sha256?: string; onProgress?: ProgressFn; signal?: AbortSignal } = {},
   ): Promise<VaultItem> {
-    const { master, manifest, header: vaultHeader } = this.require();
+    const { master, manifest, header: vaultHeader, tree } = this.require();
+    const epoch = this.epoch;
 
     const objectId = crypto.randomUUID();
     const fileKey = await generateFileKey();
@@ -301,7 +324,7 @@ export class Vault {
       key: wrapped,
     };
 
-    const writer = await opfs.openObjectWriter(objectId);
+    const writer = await tree.openObjectWriter(objectId);
     let sha256: string;
     try {
       const result = await encryptObject(
@@ -315,11 +338,12 @@ export class Vault {
         },
       );
       sha256 = result.sha256;
+      this.checkEpoch(epoch);
       await writer.close();
     } catch (e) {
       // The swap file is discarded, so nothing partial is left at the path.
       await writer.abort().catch(() => {});
-      await opfs.deleteObject(objectId);
+      await tree.deleteObject(objectId);
       throw e;
     }
 
@@ -347,19 +371,19 @@ export class Vault {
     manifest.items.push(item);
     manifest.changesSinceBackup++;
     try {
-      await saveManifest(master, manifest);
+      await saveManifest(tree, master, manifest);
     } catch (e) {
       // Never leave an object the manifest does not know about.
       manifest.items.pop();
       manifest.changesSinceBackup--;
-      await opfs.deleteObject(objectId);
+      await tree.deleteObject(objectId);
       throw e;
     }
     return item;
   }
 
   async updateItem(id: string, patch: Partial<VaultItem>): Promise<VaultItem> {
-    const { master, manifest } = this.require();
+    const { master, manifest, tree } = this.require();
     const item = this.item(id);
     const before = { ...item };
     Object.assign(item, patch, {
@@ -369,7 +393,7 @@ export class Vault {
     });
     manifest.changesSinceBackup++;
     try {
-      await saveManifest(master, manifest);
+      await saveManifest(tree, master, manifest);
     } catch (e) {
       Object.assign(item, before);
       manifest.changesSinceBackup--;
@@ -380,46 +404,46 @@ export class Vault {
 
   /** §39: explicit intent only, and the object goes with the metadata. */
   async deleteItem(id: string): Promise<void> {
-    const { master, manifest } = this.require();
+    const { master, manifest, tree } = this.require();
     const item = this.item(id);
     const index = manifest.items.indexOf(item);
 
     manifest.items.splice(index, 1);
     manifest.changesSinceBackup++;
     try {
-      await saveManifest(master, manifest);
+      await saveManifest(tree, master, manifest);
     } catch (e) {
       manifest.items.splice(index, 0, item);
       manifest.changesSinceBackup--;
       throw e;
     }
-    await opfs.deleteObject(item.objectId);
+    await tree.deleteObject(item.objectId);
   }
 
   async addCollection(name: string): Promise<Collection> {
-    const { master, manifest } = this.require();
+    const { master, manifest, tree } = this.require();
     const existing = manifest.collections.find(
       (c) => c.name.toLowerCase() === name.trim().toLowerCase(),
     );
     if (existing) return existing;
     const collection: Collection = { id: crypto.randomUUID(), name: name.trim() };
     manifest.collections.push(collection);
-    await saveManifest(master, manifest);
+    await saveManifest(tree, master, manifest);
     return collection;
   }
 
   async updateSettings(patch: Partial<VaultSettings>): Promise<VaultSettings> {
-    const { master, manifest } = this.require();
+    const { master, manifest, tree } = this.require();
     manifest.settings = { ...manifest.settings, ...patch };
-    await saveManifest(master, manifest);
+    await saveManifest(tree, master, manifest);
     return manifest.settings;
   }
 
   async markBackedUp(at: string): Promise<void> {
-    const { master, manifest } = this.require();
+    const { master, manifest, tree } = this.require();
     manifest.lastBackupAt = at;
     manifest.changesSinceBackup = 0;
-    await saveManifest(master, manifest);
+    await saveManifest(tree, master, manifest);
   }
 
   /* ---------------- backup ---------------- */
@@ -432,8 +456,26 @@ export class Vault {
     onProgress?: (p: Progress & { files: number; totalFiles: number }) => void,
     signal?: AbortSignal,
   ) {
-    const { header, manifest } = this.require();
-    return exportBackup(header, manifest, { onProgress, signal });
+    const { header, manifest, tree } = this.require();
+    return exportBackup(tree, header, manifest, { onProgress, signal });
+  }
+
+  /** Backup archives stage in the current generation's temp dir (§30). */
+  async readBackupFile(name: string): Promise<File> {
+    return this.require().tree.readTemp(name);
+  }
+
+  async discardBackupFile(name: string): Promise<void> {
+    await this.tree?.deleteTemp(name);
+  }
+
+  /** §39/§34: destroys every generation. Only ever on explicit consent. */
+  async destroy(): Promise<void> {
+    this.lock();
+    this.header = null;
+    this.tree = null;
+    await opfs.destroyAll();
+    this.state = "UNINITIALIZED";
   }
 
   /* ---------------- integrity ---------------- */
@@ -448,7 +490,8 @@ export class Vault {
     damaged: { item: VaultItem; reason: string }[];
     orphaned: string[];
   }> {
-    const { manifest } = this.require();
+    const { manifest, tree } = this.require();
+    const epoch = this.epoch;
     const missing: VaultItem[] = [];
     const damaged: { item: VaultItem; reason: string }[] = [];
     let checked = 0;
@@ -457,7 +500,8 @@ export class Vault {
       if (signal?.aborted) throw new DOMException("aborted", "AbortError");
       onProgress?.({ phase: "verifying", done: checked, total: manifest.items.length });
 
-      if (!(await opfs.objectExists(item.objectId))) {
+      this.checkEpoch(epoch);
+      if (!(await tree.objectExists(item.objectId))) {
         missing.push(item);
         checked++;
         continue;
@@ -475,17 +519,10 @@ export class Vault {
     }
 
     const referenced = new Set(manifest.items.map((i) => i.objectId));
-    const orphaned = (await opfs.listObjectIds()).filter((id) => !referenced.has(id));
+    const orphaned = (await tree.listObjectIds()).filter((id) => !referenced.has(id));
 
     return { checked, missing, damaged, orphaned };
   }
-}
-
-function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
 }
 
 function unb64Safe(s: string): Uint8Array {

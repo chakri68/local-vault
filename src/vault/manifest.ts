@@ -1,7 +1,7 @@
 import { concat, fromUtf8, randomBytes, utf8, uuidBytes } from "./bytes.ts";
 import { MANIFEST_FORMAT_VERSION, NONCE_BYTES } from "./types.ts";
 import type { Manifest, ManifestSlot } from "./types.ts";
-import * as opfs from "./opfs.ts";
+import type { VaultTree } from "./opfs.ts";
 
 /**
  * The encrypted manifest (§10, §12).
@@ -68,20 +68,21 @@ const other = (s: ManifestSlot): ManifestSlot => (s === "a" ? "b" : "a");
  * the snapshot be verified before `active` moves.
  */
 export async function saveManifest(
+  tree: VaultTree,
   master: CryptoKey,
   manifest: Manifest,
 ): Promise<ManifestSlot> {
-  const current = await opfs.readActiveSlot();
+  const current = await tree.readActiveSlot();
   const target = current ? other(current) : "a";
 
   const bytes = await encryptManifest(master, { ...manifest, updatedAt: new Date().toISOString() });
-  await opfs.writeSlot(target, bytes);
+  await tree.writeSlot(target, bytes);
 
-  const readBack = await opfs.readSlot(target);
+  const readBack = await tree.readSlot(target);
   if (!readBack) throw new Error("manifest write vanished");
   await decryptManifest(master, readBack); // throws if the snapshot is not intact
 
-  await opfs.setActiveSlot(target);
+  await tree.setActiveSlot(target);
   return target;
 }
 
@@ -92,13 +93,13 @@ export async function saveManifest(
  * target somehow unreadable. Failing closed (§50) means we surface the error
  * rather than showing a half-decrypted vault.
  */
-export async function loadManifest(master: CryptoKey): Promise<Manifest> {
-  const active = await opfs.readActiveSlot();
+export async function loadManifest(tree: VaultTree, master: CryptoKey): Promise<Manifest> {
+  const active = await tree.readActiveSlot();
   const order: ManifestSlot[] = active ? [active, other(active)] : ["a", "b"];
 
   let lastError: unknown = new Error("no manifest snapshot found");
   for (const slot of order) {
-    const bytes = await opfs.readSlot(slot);
+    const bytes = await tree.readSlot(slot);
     if (!bytes) continue;
     try {
       return await decryptManifest(master, bytes);

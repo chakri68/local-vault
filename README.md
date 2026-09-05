@@ -34,11 +34,23 @@ passphrase ──Argon2id──> KEK ──wraps──> Master Key ──wraps�
 - **Metadata is ciphertext too.** Anyone poking at OPFS sees UUIDs and noise, not
   `passport-scan.pdf`. The manifest is written with alternating snapshots and an
   `active` pointer that only moves after the new snapshot reads back and decrypts.
+  Mutations are serialised, because two of them racing on that pointer is exactly
+  how a change reports success and then vanishes.
+- **Storage is generational.** The whole vault lives under a directory named by a
+  `/current` pointer. A restore builds a *new* generation and flips the pointer
+  last, so until one small write lands, your existing vault is untouched. Same
+  trick as the manifest slots, one level up.
+- **Locking cancels work in flight.** A read that already unwrapped a file key
+  doesn't care that you cleared the master key — so every lock bumps an epoch,
+  and long operations check it between chunks and bail.
 - **Changing your passphrase re-wraps one key.** It does not re-encrypt 700 files.
 - **The backup is the real product.** OPFS is not a backup — browsers evict.
-  Export streams the whole vault into a ZIP (STORE; ciphertext doesn't compress)
-  and restore validates the passphrase, the manifest and the full object
-  inventory *before* touching anything on disk.
+  Export streams the whole vault into a ZIP (STORE; ciphertext doesn't compress).
+  Restore checks the passphrase and manifest, writes into a fresh generation,
+  then **authenticates every chunk of every object off disk** before flipping the
+  pointer. Checking that an archive contains a file of the right *name* is not
+  checking it — a corrupt object would otherwise restore cleanly and surface
+  months later, long after the healthy vault it replaced was gone.
 
 ## Chromium only, on purpose
 
@@ -71,6 +83,14 @@ encrypted manifest with crash-safe A/B snapshots, single and batch import with
 drag-drop and paste, duplicate detection, tags, collections, notes, expiry dates,
 search, image, text and PDF preview, save, share, delete, storage/quota warnings,
 integrity verification, and streaming encrypted backup + restore.
+
+## Reviews
+
+`codex exec` reviewed the first two commits and found seven real defects,
+including two criticals in restore — it deleted the live vault before
+authenticating a single object, and the replacement wasn't staged or
+rollback-safe. Both are fixed above; the generational layout exists because of
+that review. Details in the commit log.
 
 ## What doesn't, yet
 

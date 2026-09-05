@@ -28,6 +28,9 @@ import type { WrappedFileKey } from "./keys.ts";
 const MAGIC = new Uint8Array([0x4c, 0x56, 0x4f, 0x42, 0x4a]); // "LVOBJ"
 const HEADER_FIXED = 72;
 
+/** Sanity bound on a declared chunk size, to reject absurd headers outright. */
+const MAX_CHUNK_SIZE = 64 * 1024 * 1024;
+
 export interface ObjectHeader {
   version: number;
   vaultId: Uint8Array;
@@ -72,18 +75,48 @@ export function decodeHeader(buf: Uint8Array): { header: ObjectHeader; byteLengt
   const byteLength = HEADER_FIXED + keyLen;
   if (buf.length < byteLength) throw new Error("object truncated: wrapped key incomplete");
 
+  const chunkSize = readU32be(buf, 38);
+  const plaintextSize = readU64be(buf, 42);
+  const totalChunks = readU64be(buf, 50);
+
+  // The header is plaintext, so it is attacker-controlled for an attacker who
+  // can write to OPFS. It must be *internally consistent* before it is trusted
+  // to drive the decrypt loop.
+  //
+  // Without this, `totalChunks: 0` with `plaintextSize: 0` is a truncation that
+  // authenticates perfectly: the loop runs zero times, no GCM tag is ever
+  // checked, and a non-empty document reads back as an empty Blob with no error.
+  if (chunkSize <= 0 || chunkSize > MAX_CHUNK_SIZE) {
+    throw new Error("object header: implausible chunk size");
+  }
+  if (plaintextSize < 0) throw new Error("object header: negative size");
+  if (totalChunks !== chunkCount(plaintextSize, chunkSize)) {
+    throw new Error("object header: chunk count does not match declared size");
+  }
+
   return {
     byteLength,
     header: {
       version,
       vaultId: buf.slice(6, 22),
       fileId: buf.slice(22, 38),
-      chunkSize: readU32be(buf, 38),
-      plaintextSize: readU64be(buf, 42),
-      totalChunks: readU64be(buf, 50),
+      chunkSize,
+      plaintextSize,
+      totalChunks,
       key: { iv: buf.slice(58, 70), ct: buf.slice(72, byteLength) },
     },
   };
+}
+
+/**
+ * Exactly how long the object file must be.
+ *
+ * GCM proves each chunk is intact and the AAD proves how many there should be,
+ * but neither says anything about bytes *after* the last one. Comparing against
+ * the real file size is what rejects an object someone appended to.
+ */
+export function expectedObjectSize(h: ObjectHeader, headerLength: number): number {
+  return headerLength + h.plaintextSize + h.totalChunks * TAG_BYTES;
 }
 
 /**
