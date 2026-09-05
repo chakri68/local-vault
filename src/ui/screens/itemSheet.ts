@@ -2,6 +2,7 @@ import { el } from "../dom.ts";
 import { bytes, date, kind } from "../format.ts";
 import { describe } from "../errors.ts";
 import { confirmModal, modal } from "../modal.ts";
+import { renderPdf } from "../pdf.ts";
 import type { App } from "../app.ts";
 import type { VaultItem } from "../../vault/types.ts";
 
@@ -15,6 +16,7 @@ export function openItem(app: App, id: string): void {
 
   let objectUrl: string | null = null;
   let plaintext: Blob | null = null;
+  let pdfView: { destroy(): void } | null = null;
 
   const preview = el("div", { class: "preview" }, [el("div", { class: "hint", text: "Decrypting…" })]);
   const error = el("div", { class: "notice error", hidden: true });
@@ -45,6 +47,8 @@ export function openItem(app: App, id: string): void {
 
   const origClose = handle.close.bind(handle);
   handle.close = () => {
+    pdfView?.destroy();
+    pdfView = null;
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = null;
     plaintext = null;
@@ -56,7 +60,14 @@ export function openItem(app: App, id: string): void {
     .then((blob) => {
       plaintext = blob;
       objectUrl = URL.createObjectURL(blob);
+      if (item.mimeType === "application/pdf") {
+        preview.replaceChildren(el("div", { class: "hint", text: "Rendering…" }));
+        return renderPdf(blob, preview).then((view) => {
+          pdfView = view;
+        });
+      }
       preview.replaceChildren(renderPreview(item, blob, objectUrl));
+      return undefined;
     })
     .catch((e: Error) => {
       preview.replaceChildren(
@@ -78,11 +89,10 @@ function renderPreview(item: VaultItem, blob: Blob, url: string): Node {
     void blob.slice(0, 200_000).text().then((t) => (pre.textContent = t));
     return pre;
   }
-  // §37: the native PDF viewer needs <embed>/<iframe>, which object-src 'none'
-  // and frame-src 'none' block. Self-hosted pdf.js is the chosen answer; until
-  // it lands, say so rather than quietly widening the CSP.
+  // PDFs are handled before this point, by renderPdf(). Anything else has no
+  // safe in-app representation.
   return el("div", { class: "hint", style: "padding:20px;text-align:center" }, [
-    el("div", { text: `No in-app preview for ${kind(item.mimeType, item.originalName ?? "")} yet.` }),
+    el("div", { text: `No in-app preview for ${kind(item.mimeType, item.originalName ?? "")}.` }),
     el("div", { text: "Save or share it to open in another app." }),
   ]);
 }

@@ -557,6 +557,7 @@ label {
 
 .preview {
   background: var(--bg);
+  align-content: start;
   border: 1px solid var(--border);
   border-radius: 16px;
   padding: 8px;
@@ -579,6 +580,34 @@ label {
   max-height: 55vh;
   overflow: auto;
   width: 100%;
+}
+
+.pdf-view {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+.pdf-canvas {
+  background: #fff;
+  border-radius: 6px;
+  max-width: 100%;
+}
+.pdf-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  padding: 4px 0 8px;
+  background: var(--bg);
+}
+.pdf-nav .btn:disabled {
+  opacity: 0.3;
 }
 
 @keyframes fade {

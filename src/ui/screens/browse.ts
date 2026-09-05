@@ -23,7 +23,10 @@ export function renderBrowse(app: App): HTMLElement {
     class: "visually-hidden",
     tabindex: "-1",
     name: "import",
-    "aria-label": "Choose files to add to the vault",
+    // The "+ Add" button is the real control. This input has to stay rendered
+    // for the chooser to open, but it should not be a second thing in the a11y
+    // tree; tabindex -1 keeps it unfocusable, so aria-hidden is safe here.
+    "aria-hidden": "true",
   });
 
   // showPicker() is the sanctioned way to open a chooser and does not care

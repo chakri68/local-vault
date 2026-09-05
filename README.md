@@ -69,14 +69,11 @@ property if you ever swap the KDF library.
 Vault creation, passphrase unlock, auto-lock, chunked encrypted storage in OPFS,
 encrypted manifest with crash-safe A/B snapshots, single and batch import with
 drag-drop and paste, duplicate detection, tags, collections, notes, expiry dates,
-search, image and text preview, save, share, delete, storage/quota warnings,
+search, image, text and PDF preview, save, share, delete, storage/quota warnings,
 integrity verification, and streaming encrypted backup + restore.
 
 ## What doesn't, yet
 
-- **PDF preview.** The browser's viewer needs `<embed>`/`<iframe>`, which
-  `object-src 'none'` and `frame-src 'none'` block. The answer is self-hosted
-  pdf.js, not a quietly widened CSP. Until then PDFs save and share fine.
 - **WebAuthn PRF device unlock.** Designed (spec §19–22), not built. The
   passphrase is and stays the only recovery path regardless.
 - **The Android share target is untested on a real device.** The service worker

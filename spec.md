@@ -1439,13 +1439,24 @@ The browser's built-in PDF viewer is reachable only through `<embed>`/`<object>`
 those. This is a real conflict and it gets a deliberate answer rather than a silent CSP
 relaxation:
 
-- **V1: self-host `pdf.js`.** Costs roughly 1 MB and a worker, keeps `frame-src` and
-  `object-src` at `'none'` on the one application that holds decrypted identity
-  documents, and satisfies SS42's "self-host every dependency".
-- The alternative - `frame-src blob:` plus the native viewer - is cheaper and renders
-  better, and is an acceptable fallback if `pdf.js` proves painful. It is a measurable
-  weakening of the CSP on a high-value target, so it is a decision to be made
-  explicitly, not a default to drift into.
+**Decided: self-host `pdf.js` and render to a canvas.** `frame-src` and `object-src`
+stay at `'none'` on the one application that holds decrypted identity documents, and
+SS42's "self-host every dependency" holds.
+
+Implementation notes that matter:
+
+- pdf.js is **lazily imported**. It is ~1.7 MB across library and worker, and most
+  vault items are not PDFs, so it stays out of the initial bundle entirely.
+- Bytes are handed to `getDocument({ data })`, never a URL, and `useWorkerFetch`,
+  `disableAutoFetch` and `disableStream` are all off. Nothing is fetched, which is
+  what lets `connect-src` stay at `'none'`.
+- pdf.js v6 no longer uses `eval`, so no `unsafe-eval` is required. The
+  `'wasm-unsafe-eval'` already present for Argon2 is unrelated and unaffected.
+- Its worker is emitted same-origin and hashed by the bundler, satisfying
+  `worker-src 'self'`.
+- Verified: a PDF using **non-embedded base-14 Helvetica** renders correctly under
+  `connect-src 'none'`. Standard-font substitution happens locally, so no font data
+  needs fetching.
 
 ---
 
@@ -2030,7 +2041,7 @@ Minimum requirements:
 - [ ] Favorite
 - [ ] Search
 - [ ] Preview images
-- [ ] Preview PDFs
+- [x] Preview PDFs
 - [ ] Download/Save As
 - [ ] Share individual decrypted file
 - [ ] Delete
