@@ -20,10 +20,27 @@ export function renderBrowse(app: App): HTMLElement {
   const filePicker = el("input", {
     type: "file",
     multiple: true,
-    hidden: true,
+    class: "visually-hidden",
+    tabindex: "-1",
     name: "import",
     "aria-label": "Choose files to add to the vault",
   });
+
+  // showPicker() is the sanctioned way to open a chooser and does not care
+  // whether the input is rendered; .click() is the fallback for anything that
+  // lacks it. Both need transient user activation, which the click handler has.
+  const openPicker = () => {
+    const withPicker = filePicker as HTMLInputElement & { showPicker?: () => void };
+    try {
+      if (typeof withPicker.showPicker === "function") {
+        withPicker.showPicker();
+        return;
+      }
+    } catch {
+      /* SecurityError / NotAllowedError - fall through to click() */
+    }
+    filePicker.click();
+  };
 
   const paint = () => {
     const matched = search(app.index, app.query).filter(
@@ -48,15 +65,14 @@ export function renderBrowse(app: App): HTMLElement {
     results,
   ]);
 
-  // §15: drag-and-drop and paste, alongside the picker.
+  // §15: drag-and-drop, alongside the picker. These live on `main`, which is
+  // rebuilt each render, so they die with it. Paste is document-level and is
+  // therefore registered once by App -- registering it here leaked a listener
+  // per render, and one paste opened one sheet per past render.
   main.addEventListener("dragover", (e) => e.preventDefault());
   main.addEventListener("drop", (e) => {
     e.preventDefault();
     const files = [...((e as DragEvent).dataTransfer?.files ?? [])];
-    if (files.length) openImport(app, files);
-  });
-  document.addEventListener("paste", (e) => {
-    const files = [...((e as ClipboardEvent).clipboardData?.files ?? [])];
     if (files.length) openImport(app, files);
   });
 
@@ -69,7 +85,7 @@ export function renderBrowse(app: App): HTMLElement {
       el("button", {
         class: "btn",
         text: "＋ Add",
-        onClick: () => filePicker.click(),
+        onClick: openPicker,
       }),
       el("button", {
         class: "icon-btn",

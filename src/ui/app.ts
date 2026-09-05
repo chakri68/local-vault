@@ -11,6 +11,7 @@ import { renderUnsupported } from "./screens/unsupported.ts";
 import { renderSetup } from "./screens/setup.ts";
 import { renderUnlock } from "./screens/unlock.ts";
 import { renderBrowse } from "./screens/browse.ts";
+import { openImport } from "./screens/importSheet.ts";
 
 export class App {
   readonly client = new VaultClient();
@@ -92,6 +93,13 @@ export class App {
     for (const evt of ["pointerdown", "keydown"]) {
       document.addEventListener(evt, bump, { passive: true });
     }
+    // Document-level, so it is registered exactly once for the app's lifetime.
+    document.addEventListener("paste", (e) => {
+      if (this.state !== "UNLOCKED") return;
+      if (document.querySelector(".backdrop")) return; // a sheet is already open
+      const files = [...((e as ClipboardEvent).clipboardData?.files ?? [])];
+      if (files.length) openImport(this, files);
+    });
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "hidden") return;
       if (this.state === "UNLOCKED" && this.snapshot?.settings.autoLockMs === 0) {
