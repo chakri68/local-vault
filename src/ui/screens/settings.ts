@@ -7,6 +7,9 @@ import type { App } from "../app.ts";
 import type { AutoLockMs } from "../../vault/types.ts";
 import { download } from "./itemSheet.ts";
 import { renderRestore } from "./restore.ts";
+import { PrfUnsupportedError, enrollDevice, looksAvailable } from "../../platform/webauthn.ts";
+import { encodeB64url } from "../../platform/webauthn.ts";
+import { randomBytes, uuidBytes } from "../../vault/bytes.ts";
 
 const AUTO_LOCK: { label: string; value: AutoLockMs }[] = [
   { label: "Immediately when the app leaves the foreground", value: 0 },
@@ -278,14 +281,7 @@ function securitySection(app: App): HTMLElement {
     ),
   );
 
-  const deviceUnlock = el("div", { class: "hint" }, [
-    el("div", {
-      text:
-        app.caps.webAuthnPrf === false
-          ? "Device unlock isn't securely supported by this browser or device. Your passphrase still works."
-          : "Device unlock lands next. It will never replace the passphrase.",
-    }),
-  ]);
+  const deviceUnlock = deviceUnlockControls(app);
 
   return el("div", { class: "section" }, [
     el("h2", { text: "Security" }),
@@ -317,6 +313,103 @@ function securitySection(app: App): HTMLElement {
       }),
     ]),
   ]);
+}
+
+/**
+ * §18-§22. The UX never names a biometric, because WebAuthn decides at runtime
+ * whether that means a fingerprint, a face, Windows Hello or a device PIN.
+ */
+function deviceUnlockControls(app: App): HTMLElement {
+  const status = el("div", { class: "hint" });
+  const action = el("button", { class: "btn" });
+  const error = el("div", { class: "notice error", hidden: true });
+
+  const paint = () => {
+    if (app.deviceUnlock) {
+      status.textContent = "This device can unlock the vault. Your passphrase still works.";
+      action.textContent = "Remove device unlock";
+      action.className = "btn danger";
+    } else {
+      status.textContent =
+        "Unlock without typing your passphrase, using whatever this device uses to verify you.";
+      action.textContent = "Set up device unlock";
+      action.className = "btn";
+    }
+  };
+  paint();
+
+  action.addEventListener("click", async () => {
+    error.hidden = true;
+    if (app.deviceUnlock) {
+      // §62.19: dropping a wrapper touches no stored file.
+      await app.client.call({ t: "removeDevice" });
+      await app.refresh();
+      paint();
+      return;
+    }
+
+    if (!(await looksAvailable())) {
+      error.textContent =
+        "This browser or device has no verifying authenticator. Your vault passphrase still works.";
+      error.hidden = false;
+      return;
+    }
+
+    // §20.2: enrolling a second way in requires proving it is still you.
+    modal("Confirm passphrase", (h) => {
+      const pass = el("input", { type: "password", autocomplete: "current-password" });
+      const inner = el("div", { class: "notice error", hidden: true });
+      return [
+        el("div", {
+          class: "hint",
+          text: "Setting up device unlock adds a second way into this vault, so confirm your passphrase first.",
+        }),
+        el("div", { class: "field" }, [el("label", { text: "Vault passphrase" }), pass]),
+        inner,
+        el("div", { class: "actions" }, [
+          el("button", { class: "btn", text: "Cancel", onClick: () => h.close() }),
+          el("button", {
+            class: "btn primary",
+            text: "Continue",
+            onClick: async (e: Event) => {
+              const go = e.target as HTMLButtonElement;
+              go.disabled = true;
+              go.textContent = "Waiting for this device…";
+              inner.hidden = true;
+              try {
+                const prfSalt = randomBytes(32);
+                const vaultId = uuidBytes(crypto.randomUUID());
+                const { credentialId, prfOutput } = await enrollDevice(vaultId, prfSalt);
+                await app.client.call({
+                  t: "enrollDevice",
+                  passphrase: pass.value,
+                  credentialId: encodeB64url(credentialId),
+                  prfSalt,
+                  prfOutput,
+                });
+                h.close();
+                await app.refresh();
+                paint();
+              } catch (err) {
+                go.disabled = false;
+                go.textContent = "Continue";
+                // §63.6: no silent downgrade. If there is no PRF there is no
+                // secret to derive, and we say so instead of storing something
+                // weaker and calling it biometric unlock.
+                inner.textContent =
+                  err instanceof PrfUnsupportedError
+                    ? "Device unlock isn't securely supported here. Your vault passphrase still works."
+                    : describe(err, "That passphrase is not correct.");
+                inner.hidden = false;
+              }
+            },
+          }),
+        ]),
+      ];
+    });
+  });
+
+  return el("div", { class: "stack" }, [status, action, error]);
 }
 
 function changePassphrase(app: App): void {

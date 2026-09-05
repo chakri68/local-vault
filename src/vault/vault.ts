@@ -1,6 +1,7 @@
-import { b64, randomBytes, uuidBytes, zero } from "./bytes.ts";
+import { b64, randomBytes, unb64, uuidBytes, zero } from "./bytes.ts";
 import { DEFAULT_KDF_PARAMS, KDF_SALT_BYTES, deriveKek } from "./crypto/argon2.ts";
 import {
+  deriveDeviceKek,
   generateFileKey,
   generateMasterKeyBytes,
   importMasterKey,
@@ -183,7 +184,7 @@ export class Vault {
         throw new Error("this vault was created by a newer version of Local Vault");
       }
 
-      const kek = await deriveKek(passphrase, unb64Safe(header.kdfSalt), header.kdfParams);
+      const kek = await deriveKek(passphrase, unb64(header.kdfSalt), header.kdfParams);
       const masterRaw = await openBytes(kek, header.passphrase);
       try {
         this.master = await importMasterKey(masterRaw);
@@ -218,15 +219,116 @@ export class Vault {
   }
 
   /** §9.3: re-derive, re-wrap. No stored object is touched. */
+  /* ---------------- device unlock (§19-§22) ---------------- */
+
+  /**
+   * Non-sensitive: a credential ID and a salt. Readable while locked, because
+   * the unlock screen has to know whether to offer the button at all.
+   */
+  async deviceUnlockInfo(): Promise<{ credentialId: string; prfSalt: string } | null> {
+    const tree = this.tree ?? (await opfs.openCurrent());
+    const raw = tree ? await tree.readHeaderRaw() : null;
+    if (!raw) return null;
+    const header = JSON.parse(raw) as VaultHeader;
+    if (!header.deviceUnlock) return null;
+    return {
+      credentialId: header.deviceUnlock.credentialId,
+      prfSalt: header.deviceUnlock.prfSalt,
+    };
+  }
+
+  /**
+   * §20. Requires the vault already unlocked *and* the passphrase re-entered:
+   * enrolling a second way in is exactly the moment to prove it is still you.
+   *
+   * Adds a wrapper. It never replaces the passphrase wrapper, which is what
+   * makes §22 hold — losing the device costs convenience, not the vault.
+   */
+  async enrollDeviceUnlock(
+    passphrase: string,
+    credentialId: string,
+    prfSalt: Uint8Array,
+    prfOutput: Uint8Array,
+  ): Promise<void> {
+    const { header, tree } = this.require();
+
+    const kek = await deriveKek(passphrase, unb64(header.kdfSalt), header.kdfParams);
+    const masterRaw = await openBytes(kek, header.passphrase); // throws if wrong
+    try {
+      const deviceKek = await deriveDeviceKek(prfOutput, prfSalt);
+      const wrapped = await sealBytes(deviceKek, masterRaw);
+      const updated: VaultHeader = {
+        ...header,
+        deviceUnlock: {
+          version: 1,
+          credentialId,
+          prfSalt: b64(prfSalt),
+          wrapped,
+        },
+      };
+      await tree.writeHeaderRaw(JSON.stringify(updated, null, 2));
+      this.header = updated;
+    } finally {
+      zero(masterRaw);
+      zero(prfOutput);
+    }
+  }
+
+  async unlockWithDevice(prfOutput: Uint8Array): Promise<void> {
+    this.state = "UNLOCKING";
+    try {
+      const tree = await opfs.openCurrent();
+      const raw = tree ? await tree.readHeaderRaw() : null;
+      if (!tree || !raw) throw new Error("no vault on this device");
+      const header = JSON.parse(raw) as VaultHeader;
+      if (!header.deviceUnlock) throw new Error("device unlock is not set up on this vault");
+
+      const deviceKek = await deriveDeviceKek(prfOutput, unb64(header.deviceUnlock.prfSalt));
+      const masterRaw = await openBytes(deviceKek, header.deviceUnlock.wrapped);
+      try {
+        this.master = await importMasterKey(masterRaw);
+      } finally {
+        zero(masterRaw);
+      }
+
+      this.manifest = await loadManifest(tree, this.master);
+      if (this.manifest.vaultId !== header.vaultId) {
+        throw new Error("manifest does not belong to this vault");
+      }
+      this.tree = tree;
+      this.header = header;
+      this.state = "UNLOCKED";
+      await tree.sweepTemp();
+      await opfs.pruneOrphanGenerations();
+    } catch (e) {
+      this.lock();
+      this.state = "LOCKED";
+      throw e;
+    } finally {
+      zero(prfOutput);
+    }
+  }
+
+  /** Removing convenience must not require re-encrypting anything (§62.19). */
+  async removeDeviceUnlock(): Promise<void> {
+    const { header, tree } = this.require();
+    const updated = { ...header };
+    delete updated.deviceUnlock;
+    await tree.writeHeaderRaw(JSON.stringify(updated, null, 2));
+    this.header = updated;
+  }
+
   async changePassphrase(current: string, next: string): Promise<void> {
     const { header, tree } = this.require();
-    const oldKek = await deriveKek(current, unb64Safe(header.kdfSalt), header.kdfParams);
+    const oldKek = await deriveKek(current, unb64(header.kdfSalt), header.kdfParams);
     await openBytes(oldKek, header.passphrase); // proves `current` is right before we move
 
     const salt = randomBytes(KDF_SALT_BYTES);
     const newKek = await deriveKek(next, salt, DEFAULT_KDF_PARAMS);
     const rewrapped = await rewrapMasterKey(oldKek, newKek, header.passphrase);
 
+    // The device wrapper protects the same master key and is unaffected by a
+    // new passphrase, so it deliberately survives (§9.3: no re-encryption).
     const updated: VaultHeader = {
       ...header,
       kdfSalt: b64(salt),
@@ -523,11 +625,4 @@ export class Vault {
 
     return { checked, missing, damaged, orphaned };
   }
-}
-
-function unb64Safe(s: string): Uint8Array {
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
 }

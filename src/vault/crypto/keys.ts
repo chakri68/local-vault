@@ -57,6 +57,34 @@ export async function rewrapMasterKey(
 }
 
 /**
+ * Device-unlock KEK, derived from a WebAuthn PRF output (§19).
+ *
+ * The PRF output is already uniform high-entropy material, so this is HKDF for
+ * domain separation and salting, not for stretching — there is no password here
+ * to make expensive.
+ */
+export async function deriveDeviceKek(
+  prfOutput: Uint8Array,
+  salt: Uint8Array,
+): Promise<CryptoKey> {
+  const base = await crypto.subtle.importKey("raw", prfOutput as BufferSource, "HKDF", false, [
+    "deriveKey",
+  ]);
+  return crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: salt as BufferSource,
+      info: new TextEncoder().encode("local-vault/device-unlock/v1"),
+    },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+/**
  * A fresh per-file key (§9.4). Extractable only so that wrapKey can read it;
  * the copy that comes back out of unwrapFileKey is not.
  */

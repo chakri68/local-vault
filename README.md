@@ -44,6 +44,12 @@ passphrase ──Argon2id──> KEK ──wraps──> Master Key ──wraps�
   doesn't care that you cleared the master key — so every lock bumps an epoch,
   and long operations check it between chunks and bail.
 - **Changing your passphrase re-wraps one key.** It does not re-encrypt 700 files.
+- **Device unlock is a second wrapper, never a replacement.** WebAuthn PRF gives a
+  stable secret bound to the credential; that derives a KEK which wraps the same
+  master key. No PRF means no secret to derive, so the feature is refused outright
+  rather than downgraded into something that only *looks* like biometric unlock.
+  The passphrase wrapper always exists, so a lost phone costs convenience, not
+  the vault.
 - **The backup is the real product.** OPFS is not a backup — browsers evict.
   Export streams the whole vault into a ZIP (STORE; ciphertext doesn't compress).
   Restore checks the passphrase and manifest, writes into a fresh generation,
@@ -82,7 +88,8 @@ Vault creation, passphrase unlock, auto-lock, chunked encrypted storage in OPFS,
 encrypted manifest with crash-safe A/B snapshots, single and batch import with
 drag-drop and paste, duplicate detection, tags, collections, notes, expiry dates,
 search, image, text and PDF preview, save, share, delete, storage/quota warnings,
-integrity verification, and streaming encrypted backup + restore.
+integrity verification, streaming encrypted backup + restore, and WebAuthn PRF
+device unlock.
 
 ## Reviews
 
@@ -94,8 +101,6 @@ that review. Details in the commit log.
 
 ## What doesn't, yet
 
-- **WebAuthn PRF device unlock.** Designed (spec §19–22), not built. The
-  passphrase is and stays the only recovery path regardless.
 - **The Android share target is untested on a real device.** The service worker
   side is written and the handoff is memory-only by design — shared files are
   never staged as plaintext, so an abandoned import evaporates instead of leaking.

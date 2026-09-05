@@ -22,6 +22,16 @@ export type Req =
   | { t: "addCollection"; name: string }
   | { t: "settings"; patch: Partial<VaultSettings> }
   | { t: "changePassphrase"; current: string; next: string }
+  | { t: "deviceInfo" }
+  | {
+      t: "enrollDevice";
+      passphrase: string;
+      credentialId: string;
+      prfSalt: Uint8Array;
+      prfOutput: Uint8Array;
+    }
+  | { t: "unlockDevice"; prfOutput: Uint8Array }
+  | { t: "removeDevice" }
   | { t: "verify" }
   | { t: "storage" }
   | { t: "exportBackup" }
@@ -75,6 +85,10 @@ export interface ResMap {
   addCollection: Collection;
   settings: VaultSettings;
   changePassphrase: void;
+  deviceInfo: { credentialId: string; prfSalt: string } | null;
+  enrollDevice: void;
+  unlockDevice: void;
+  removeDevice: void;
   verify: VerifyReport;
   storage: StorageStatus;
   exportBackup: BackupResult;

@@ -39,6 +39,9 @@ const SERIALIZED = new Set<Req["t"]>([
   "addCollection",
   "settings",
   "changePassphrase",
+  "enrollDevice",
+  "unlockDevice",
+  "removeDevice",
   "markBackedUp",
   "exportBackup",
   "discardBackup",
@@ -123,6 +126,23 @@ async function dispatch(req: Req, onProgress: (p: Progress) => void): Promise<un
 
     case "changePassphrase":
       return vault.changePassphrase(req.current, req.next);
+
+    case "deviceInfo":
+      return vault.deviceUnlockInfo();
+
+    case "enrollDevice":
+      return vault.enrollDeviceUnlock(
+        req.passphrase,
+        req.credentialId,
+        req.prfSalt,
+        req.prfOutput,
+      );
+
+    case "unlockDevice":
+      return vault.unlockWithDevice(req.prfOutput);
+
+    case "removeDevice":
+      return vault.removeDeviceUnlock();
 
     case "verify":
       return vault.verify(onProgress);

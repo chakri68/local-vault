@@ -2089,74 +2089,74 @@ Minimum requirements:
 
 ## Vault
 
-- [ ] Create encrypted vault
-- [ ] Passphrase unlock
-- [ ] Lock
-- [ ] Auto-lock
-- [ ] OPFS encrypted object storage
-- [ ] Encrypted metadata manifest
-- [ ] Add file
-- [ ] Multi-file import
-- [ ] Rename
-- [ ] Tags
-- [ ] Collections
-- [ ] Notes
-- [ ] Favorite
-- [ ] Search
-- [ ] Preview images
+- [x] Create encrypted vault
+- [x] Passphrase unlock
+- [x] Lock
+- [x] Auto-lock
+- [x] OPFS encrypted object storage
+- [x] Encrypted metadata manifest
+- [x] Add file
+- [x] Multi-file import
+- [x] Rename
+- [x] Tags
+- [x] Collections
+- [x] Notes
+- [x] Favorite
+- [x] Search
+- [x] Preview images
 - [x] Preview PDFs
-- [ ] Download/Save As
-- [ ] Share individual decrypted file
-- [ ] Delete
+- [x] Download/Save As
+- [x] Share individual decrypted file
+- [x] Delete
 
 ## PWA
 
-- [ ] Installable manifest
-- [ ] Offline application shell
-- [ ] Service Worker
+- [x] Installable manifest
+- [x] Offline application shell
+- [x] Service Worker
 - [ ] Android Web Share Target
-- [ ] In-memory share handoff (never plaintext to OPFS)
-- [ ] Capability boot gate (§49.1)
+- [x] In-memory share handoff (never plaintext to OPFS)
+- [x] Capability boot gate (§49.1)
 
 ## Security
 
-- [ ] AES-GCM encrypted files
-- [ ] Random per-file keys
-- [ ] Argon2id passphrase KDF
-- [ ] Master Key wrapping
-- [ ] Strict CSP
-- [ ] No third-party network calls
-- [ ] Optional WebAuthn PRF device unlock
-- [ ] Passphrase recovery always available
+- [x] AES-GCM encrypted files
+- [x] Random per-file keys
+- [x] Argon2id passphrase KDF
+- [x] Master Key wrapping
+- [x] Strict CSP
+- [x] No third-party network calls
+- [x] Optional WebAuthn PRF device unlock
+- [x] Passphrase recovery always available
 
 ## Storage
 
-- [ ] `navigator.storage.persist()`
-- [ ] `navigator.storage.persisted()`
-- [ ] storage status UI
-- [ ] quota estimate
-- [ ] low-space warnings
-- [ ] no automatic vault deletion
-- [ ] integrity check
+- [x] `navigator.storage.persist()`
+- [x] `navigator.storage.persisted()`
+- [x] storage status UI
+- [x] quota estimate
+- [x] low-space warnings
+- [x] no automatic vault deletion
+- [x] integrity check
 
 ## Backup
 
-- [ ] encrypted ZIP export
-- [ ] streaming export
-- [ ] Download/Save fallback
+- [x] encrypted ZIP export
+- [x] streaming export
+- [x] Download/Save fallback
 - [ ] native share sheet export where available
 - [ ] Google Drive usable as an OS share destination
-- [ ] encrypted ZIP restore
-- [ ] restore validation
-- [ ] backup reminders
-- [ ] show last backup date
-- [ ] show changes since last backup
+- [x] encrypted ZIP restore
+- [x] restore validation
+- [x] backup reminders
+- [x] show last backup date
+- [x] show changes since last backup
 
 ---
 
 # 60. V1.1 / V2 Ideas
 
-- [ ] Duplicate detection
+- [x] Duplicate detection
 - [ ] Expiry-date dashboard
 - [ ] Local OCR
 - [ ] Version history

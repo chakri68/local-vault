@@ -24,6 +24,8 @@ export class App {
   activeCollection: string | null = null;
   /** Files handed over by the share target, held in memory only (§16). */
   pending: File[] = [];
+  /** Non-sensitive device-unlock config, or null when not enrolled (§21). */
+  deviceUnlock: { credentialId: string; prfSalt: string } | null = null;
 
   private lockTimer: number | undefined;
   private root: HTMLElement;
@@ -42,6 +44,7 @@ export class App {
     }
 
     this.state = await this.client.call({ t: "probe" });
+    this.deviceUnlock = await this.client.call({ t: "deviceInfo" });
     this.render();
     this.watchActivity();
   }
@@ -52,6 +55,7 @@ export class App {
     this.snapshot = await this.client.call({ t: "snapshot" });
     this.index = buildIndex(this.snapshot.items, this.snapshot.collections);
     this.storage = await this.client.call({ t: "storage" });
+    this.deviceUnlock = await this.client.call({ t: "deviceInfo" });
     this.armAutoLock();
   }
 
