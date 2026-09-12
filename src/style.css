@@ -1,6 +1,12 @@
 /* Amber Phosphor Terminal — see ui_theme.md.
    Fonts are self-hosted (§59: no remote fonts, and font-src stays 'self'). */
 
+/* The shared design tokens, vendored rather than linked. Every other chakri.me
+   site pulls them cross-origin from theme.chakri.me; the vault's own CSP
+   (style-src 'self', connect-src 'none' — §43, §44) forbids that, so the tokens
+   are bundled instead. theme-tokens.css is generated: `npm run pull-theme`. */
+@import "./theme-tokens.css";
+
 @font-face {
   font-family: "JetBrains Mono";
   src: url("/fonts/jetbrains-mono-var.woff2") format("woff2");
@@ -17,26 +23,13 @@
   font-display: block;
 }
 
+/* The 12 shared tokens (--bg --panel-2 --panel --border --text --muted --accent
+   --accent-dim --warn --danger --font-pixel --font-mono, plus color-scheme) are
+   imported above from the generated copy — never redefine them here, that
+   shadows the source and drifts. Only the vault's own extras live below. */
 :root {
-  --bg: #000000;
-  --panel-2: #000;
-  --panel: #0b0b0a;
-
-  --border: #2b2925;
-  --text: #ece7da;
-  --muted: #8b8574;
-
-  --accent: #ffb000;
-  --accent-dim: #cc8a00;
-  --warn: #ff6a2b;
-  --danger: #ff6b6b;
-  --danger-soft: #ff9b9b;
-  --ok: #6f8f73;
-
-  --font-pixel: "Press Start 2P", ui-monospace, monospace;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-
-  color-scheme: dark;
+  --danger-soft: #ff9b9b; /* danger body copy, a shade under --danger */
+  --ok: #6f8f73; /* code-comment green — the only non-amber "good" tone */
 }
 
 * {
