@@ -30,31 +30,23 @@ Guiding principles:
 
 ## 2. Design tokens
 
-Define these once (CSS custom properties on `:root`, or your framework's theme).
+**Do not define these here.** They live in one place for every chakri.me site:
+`https://theme.chakri.me/tokens.css`, source in the `theme` repo. The other
+sites link that stylesheet straight from `<head>`; the vault cannot, because
+§43 pins `style-src 'self'` and `connect-src 'none'` and §44 asks for zero
+application-initiated network requests — the browser would block the link, and
+it would be right to.
 
-```css
-:root {
-  /* Surfaces (darkest → lightest) */
-  --bg: #000000; /* pure black — canvas / deepest wells */
-  --panel-2: #000; /* input & button backgrounds (also near-black) */
-  --panel: #0b0b0a; /* main app + sidebar surface, a hair above black */
+So the vault vendors them instead: `npm run pull-theme` fetches a pinned version
+and writes `src/theme-tokens.css`, which is committed and `@import`ed on the
+first line of `src/style.css`. That file is generated — edit the theme at its
+source and re-run the script; never retype a value into it or into `:root`.
+Only the vault's own extras (`--danger-soft`, `--ok`) are declared locally.
 
-  /* Lines & text */
-  --border: #2b2925; /* warm dark-gray hairline borders */
-  --text: #ece7da; /* warm off-white — primary text */
-  --muted: #8b8574; /* warm gray — labels, secondary text, icons */
-
-  /* Accent — the ONLY chromatic color */
-  --accent: #ffb000; /* amber phosphor — active/primary/interactive */
-  --accent-dim: #cc8a00; /* hover / pressed / borders on hover */
-  --warn: #ff6a2b; /* caution states, distinct from accent */
-
-  /* Fonts */
-  --font-pixel: "Press Start 2P", ui-monospace, monospace;
-  --font-mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-}
-```
+The current values are in `src/theme-tokens.css`. They are not repeated here on
+purpose: a second copy in a doc is a copy that goes stale, which is the exact
+failure this arrangement exists to prevent. The canonical, annotated list — and
+the rest of the design language — is `ui_theme.md` in the `theme` repo.
 
 Ancillary colors used inline (keep these consistent if you extend):
 
@@ -72,11 +64,12 @@ semantic role.
 
 ## 3. Typography
 
-- **Load two Google Fonts:** `Press Start 2P` (pixel display) and
-  `JetBrains Mono:wght@400;500;700`.
-  - Pixel font: load with `display=block` (it must NEVER flash a fallback — the
+- **Two faces:** `Press Start 2P` (pixel display) and `JetBrains Mono`. The
+  vault self-hosts both from `public/fonts/` (§59: no remote fonts, `font-src`
+  stays `'self'`) rather than loading them from Google as the other sites do.
+  - Pixel font: `font-display: block` (it must NEVER flash a fallback — the
     fallback shifts layout badly).
-  - Mono font: load with `display=swap`.
+  - Mono font: `font-display: swap`.
 - **Base family is `--font-mono`.** Applied on `:root`/`body` and all inputs/buttons.
 - **Pixel font (`--font-pixel`) only for:** the app title (`h1`), the intro splash
   title, and modal headings (`h3`). Always amber, always with a glow text-shadow,

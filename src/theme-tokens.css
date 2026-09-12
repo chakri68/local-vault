@@ -1,0 +1,30 @@
+/* GENERATED — do not edit. Run `npm run pull-theme` instead.
+   Source: https://theme.chakri.me/1.0.0/tokens.css
+   Why vendored rather than linked: see scripts/pull-theme.mjs. */
+/* Amber Phosphor Terminal — design tokens · v1.0.0
+   The single source of truth. Link this file; define nothing locally.
+   Full design language: ui_theme.md. Load the fonts yourself (see §3). */
+:root {
+  /* Surfaces (darkest → lightest) */
+  --bg: #000000; /* pure black — canvas / deepest wells */
+  --panel-2: #000000; /* input & button backgrounds (also near-black) */
+  --panel: #0b0b0a; /* main app + sidebar surface, a hair above black */
+
+  /* Lines & text */
+  --border: #2b2925; /* warm dark-gray hairline borders */
+  --text: #ece7da; /* warm off-white — primary text */
+  --muted: #8b8574; /* warm gray — labels, secondary text, icons */
+
+  /* Accent — the ONLY chromatic color */
+  --accent: #ffb000; /* amber phosphor — active/primary/interactive */
+  --accent-dim: #cc8a00; /* hover / pressed / borders on hover */
+  --warn: #ff6a2b; /* caution states, distinct from accent */
+  --danger: #ff6b6b; /* danger / destructive */
+
+  /* Fonts */
+  --font-pixel: "Press Start 2P", ui-monospace, monospace;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  color-scheme: dark;
+}
